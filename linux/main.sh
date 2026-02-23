@@ -105,7 +105,7 @@ while true; do
             configurar_modulo_dns
             pause
             ;;
-        0) msg_info "Saliendo. ¡Hasta luego!"; exit 0 ;;
+        0) exit 0 ;;
         *) msg_error "Opción inválida."; sleep 1 ;;
     esac
 done
