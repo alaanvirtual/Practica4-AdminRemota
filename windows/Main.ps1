@@ -1,6 +1,5 @@
 # ============================================================
 # Archivo     : Main.ps1
-# Descripcion : Punto de entrada principal – Menu interactivo
 # Practica    : 4 – SSH y Refactorización Modular
 # ============================================================
 
@@ -11,125 +10,101 @@ $LIB = Join-Path $PSScriptRoot "lib"
 . "$LIB\DHCP-Functions.ps1"
 . "$LIB\DNS-Functions.ps1"
 
-Set-StrictMode -Version Latest
+# Configuración de sesión
 $ErrorActionPreference = "Stop"
 
-Test-Administrator   # ← Valida permisos antes de iniciar
+# Validar privilegios
+Test-Administrator
 
 # ── Submenú DHCP ────────────────────────────────────────────
 function Menu-DHCP {
-    while ($true) {
+    $sub_loop = $true
+    while ($sub_loop) {
         Clear-Host
         Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Green
         Write-Host "║           SUBMÓDULO – SERVIDOR DHCP                  ║" -ForegroundColor Green
         Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Green
-        Write-Host "║  1. Verificar instalacion                            ║" -ForegroundColor White
-        Write-Host "║  2. Instalar rol DHCP                                ║" -ForegroundColor White
-        Write-Host "║  3. Configurar ambito (scope)                        ║" -ForegroundColor White
-        Write-Host "║  4. Monitoreo de leases                              ║" -ForegroundColor White
-        Write-Host "║  5. Eliminar un ambito                               ║" -ForegroundColor White
-        Write-Host "║  0. Volver al menu principal                         ║" -ForegroundColor White
+        Write-Host "║  1. Verificar instalacion                            ║"
+        Write-Host "║  2. Instalar rol DHCP                                ║"
+        Write-Host "║  3. Configurar ambito (scope)                        ║"
+        Write-Host "║  4. Monitoreo de leases                              ║"
+        Write-Host "║  5. Eliminar un ambito                               ║"
+        Write-Host "║  0. Volver al menu principal                         ║"
         Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Green
-        Write-Host ""
         $sub = (Read-Host " Opcion").Trim()
-        try {
-            switch ($sub) {
-                "1" { Show-DHCPStatus;      Pausa-Enter }
-                "2" { Install-DHCPRole;     Pausa-Enter }
-                "3" { Configure-DHCPScope;  Pausa-Enter }
-                "4" { Show-DHCPMonitor;     Pausa-Enter }
-                "5" { Remove-DHCPScope;     Pausa-Enter }
-                "0" { return }
-                default { Write-Warn "Opcion invalida."; Start-Sleep 1 }
-            }
-        } catch { 
-            Write-Error "Error en DHCP: $_"
-            Pausa-Enter 
+        switch ($sub) {
+            "1" { Show-DHCPStatus;      Pausa-Enter }
+            "2" { Install-DHCPRole;     Pausa-Enter }
+            "3" { Configure-DHCPScope;  Pausa-Enter }
+            "4" { Show-DHCPMonitor;     Pausa-Enter }
+            "5" { Remove-DHCPScope;     Pausa-Enter }
+            "0" { $sub_loop = $false }
+            default { Write-Warning "Invalido"; Start-Sleep 1 }
         }
     }
 }
 
 # ── Submenú DNS ──────────────────────────────────────────────
 function Menu-DNS {
-    while ($true) {
+    $dns_loop = $true
+    while ($dns_loop) {
         Clear-Host
         Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Magenta
         Write-Host "║           SUBMÓDULO – SERVIDOR DNS                   ║" -ForegroundColor Magenta
         Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Magenta
-        Write-Host "║  1. Verificar estado del servicio                    ║" -ForegroundColor White
-        Write-Host "║  2. Instalar rol DNS Server                          ║" -ForegroundColor White
-        Write-Host "║  3. Configurar Forwarders                            ║" -ForegroundColor White
-        Write-Host "║  4. Listar zonas configuradas                        ║" -ForegroundColor White
-        Write-Host "║  5. Agregar nueva zona                               ║" -ForegroundColor White
-        Write-Host "║  6. Eliminar zona existente                          ║" -ForegroundColor White
-        Write-Host "║  7. Probar resolucion DNS                            ║" -ForegroundColor White
-        Write-Host "║  0. Volver al menu principal                         ║" -ForegroundColor White
+        Write-Host "║  1. Verificar estado del servicio                    ║"
+        Write-Host "║  2. Instalar rol DNS Server                          ║"
+        Write-Host "║  3. Configurar Forwarders                            ║"
+        Write-Host "║  4. Listar zonas configuradas                        ║"
+        Write-Host "║  5. Agregar nueva zona                               ║"
+        Write-Host "║  6. Eliminar zona existente                          ║"
+        Write-Host "║  7. Probar resolucion DNS                            ║"
+        Write-Host "║  0. Volver al menu principal                         ║"
         Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Magenta
-        Write-Host ""
         $sub = (Read-Host " Opcion").Trim()
-        try {
-            switch ($sub) {
-                "1" { Show-DNSStatus;       Pausa-Enter }
-                "2" { Install-DNSRole;      Pausa-Enter }
-                "3" { Set-DNSForwarder;     Pausa-Enter }
-                "4" { Get-DNSZones;         Pausa-Enter }
-                "5" { Add-DNSZone;          Pausa-Enter }
-                "6" { Remove-DNSZone;       Pausa-Enter }
-                "7" { Test-DNSResolution;   Pausa-Enter }
-                "0" { return }
-                default { Write-Warn "Opcion invalida."; Start-Sleep 1 }
-            }
-        } catch { 
-            Write-Error "Error en DNS: $_"
-            Pausa-Enter 
+        switch ($sub) {
+            "1" { Show-DNSStatus;       Pausa-Enter }
+            "2" { Install-DNSRole;      Pausa-Enter }
+            "3" { Set-DNSForwarder;     Pausa-Enter }
+            "4" { Get-DNSZones;         Pausa-Enter }
+            "5" { Add-DNSZone;          Pausa-Enter }
+            "6" { Remove-DNSZone;       Pausa-Enter }
+            "7" { Test-DNSResolution;   Pausa-Enter }
+            "0" { $dns_loop = $false }
+            default { Write-Warning "Invalido"; Start-Sleep 1 }
         }
     }
-}
-
-# ── Estado general de servicios ──────────────────────────────
-function Show-GeneralStatus {
-    Write-Sep
-    Write-Info "=== ESTADO GENERAL DE SERVICIOS (Windows) ==="
-    Test-WinService "sshd"
-    Test-WinService "DHCPServer"
-    Test-WinService "DNS"
-    Write-Sep
 }
 
 # ── Bucle del menú principal ─────────────────────────────────
-try {
-    while ($true) {
-        Clear-Host
-        Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║    PRÁCTICA 4 – ADMINISTRADOR DE SERVIDORES          ║" -ForegroundColor Yellow
-        Write-Host "║               SERVIDOR WINDOWS                       ║" -ForegroundColor Yellow
-        Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-        Write-Host "║  1.  SSH   – Instalar y configurar acceso remoto     ║" -ForegroundColor White
-        Write-Host "║  2.  DHCP  – Gestion del servidor DHCP           >>  ║" -ForegroundColor White
-        Write-Host "║  3.  DNS   – Gestion del servidor DNS            >>  ║" -ForegroundColor White
-        Write-Host "║  4.  Estado – Ver todos los servicios                ║" -ForegroundColor White
-        Write-Host "║  5.  TODO  – Instalar SSH + DHCP + DNS              ║" -ForegroundColor White
-        Write-Host "║  0.  Salir                                           ║" -ForegroundColor White
-        Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
-        Write-Host ""
-        $op = (Read-Host " Seleccione una opcion").Trim()
-        
-        switch ($op) {
-            "1" { Configurar-ModuloSSH;  Pausa-Enter }
-            "2" { Menu-DHCP }
-            "3" { Menu-DNS }
-            "4" { Show-GeneralStatus;    Pausa-Enter }
-            "5" {
-                Configurar-ModuloSSH
-                Install-DHCPRole
-                Install-DNSRole
-                Pausa-Enter
-            }
-            "0" { exit 0 }
-            default { Write-Warning "Opcion no valida."; Start-Sleep 1 }
+$main_loop = $true
+while ($main_loop) {
+    Clear-Host
+    Write-Host "╔══════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║    PRÁCTICA 4 – ADMINISTRADOR DE SERVIDORES          ║" -ForegroundColor Yellow
+    Write-Host "║               SERVIDOR WINDOWS                       ║" -ForegroundColor Yellow
+    Write-Host "╠══════════════════════════════════════════════════════╣" -ForegroundColor Cyan
+    Write-Host "║  1.  SSH   – Instalar y configurar acceso remoto     ║"
+    Write-Host "║  2.  DHCP  – Gestion del servidor DHCP           >>  ║"
+    Write-Host "║  3.  DNS   – Gestion del servidor DNS            >>  ║"
+    Write-Host "║  4.  Estado – Ver todos los servicios                ║"
+    Write-Host "║  5.  TODO  – Instalar SSH + DHCP + DNS              ║"
+    Write-Host "║  0.  Salir                                           ║"
+    Write-Host "╚══════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    $op = (Read-Host " Seleccione").Trim()
+    
+    switch ($op) {
+        "1" { Configurar-ModuloSSH;  Pausa-Enter }
+        "2" { Menu-DHCP }
+        "3" { Menu-DNS }
+        "4" { 
+            Write-Sep
+            Test-WinService "sshd"; Test-WinService "DHCPServer"; Test-WinService "DNS"
+            Write-Sep
+            Pausa-Enter 
         }
+        "5" { Configurar-ModuloSSH; Install-DHCPRole; Install-DNSRole; Pausa-Enter }
+        "0" { $main_loop = $false; exit 0 }
+        default { Write-Warning "No valida"; Start-Sleep 1 }
     }
-} catch {
-    Write-Host "ERROR FATAL: $_" -ForegroundColor Red
-    Pausa-Enter
 }
