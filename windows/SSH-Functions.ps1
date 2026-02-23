@@ -1,26 +1,47 @@
-# ============================================================
-# Biblioteca: SSH-Functions.ps1
-# ============================================================
+function Verificar-SSH {
+    Write-Host ">>> Verificando OpenSSH Server..." -ForegroundColor Cyan
+    $ssh = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
+    if ($ssh.State -eq 'Installed') {
+        Write-Host " OpenSSH Server esta INSTALADO." -ForegroundColor Green
+        Get-Service sshd | Select-Object Status, Name, DisplayName | Format-Table -AutoSize
+    } else {
+        Write-Host " OpenSSH Server NO esta instalado." -ForegroundColor Red
+    }
+}
 
-function Configurar-ModuloSSH {
-    Write-Host ""
-    Write-Host "=== CONFIGURANDO ACCESO REMOTO SSH ===" -ForegroundColor Cyan
-    Write-Sep
-
+function Instalar-SSH {
+    Write-Host ">>> Instalando OpenSSH Server..." -ForegroundColor Cyan
     try {
-        # Intenta activar el servicio si ya esta en el sistema
-        Write-Host "Iniciando servicio sshd..." -ForegroundColor Gray
-        Start-Service sshd -ErrorAction Stop
-        Set-Service -Name sshd -StartupType 'Automatic'
-        Write-Host "[OK] El servicio SSH ya esta activo y en automatico." -ForegroundColor Green
-    } catch {
-        # Si falla (porque no esta instalado), intenta instalarlo
-        Write-Host "Instalando OpenSSH Server desde capacidades de Windows..." -ForegroundColor Yellow
-        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+        Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 -ErrorAction Stop
         Start-Service sshd
         Set-Service -Name sshd -StartupType 'Automatic'
-        Write-Host "[OK] Instalacion y activacion completada con exito." -ForegroundColor Green
+        
+        Get-NetFirewallRule -Name *ssh* -ErrorAction SilentlyContinue | Enable-NetFirewallRule
+        
+        Write-Host " SSH instalado y configurado para iniciar automaticamente." -ForegroundColor Green
+    } catch {
+        Write-Host " Error al instalar SSH: $_" -ForegroundColor Red
     }
-    
-    Write-Sep
+}
+
+function Iniciar-MenuSSH {
+    while ($true) {
+        Clear-Host
+        Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
+        Write-Host "              ADMINISTRADOR DE SERVIDOR SSH             " -ForegroundColor Yellow
+        Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
+        Write-Host "   1. Verificar estado de SSH" -ForegroundColor White
+        Write-Host "   2. Instalar OpenSSH Server" -ForegroundColor White
+        Write-Host "   0. Volver al menu principal" -ForegroundColor White
+        Write-Host "--------------------------------------------------------" -ForegroundColor DarkCyan
+        Write-Host ""
+
+        $op = Read-Host " Seleccione una opcion"
+        switch ($op) {
+            "1" { Verificar-SSH; Pausa }
+            "2" { Instalar-SSH; Pausa }
+            "0" { return }
+            default { Write-Host "Opcion no valida." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+        }
+    }
 }

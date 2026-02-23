@@ -1,150 +1,207 @@
-# ============================================================
-# Archivo     : DNS-Functions.ps1
-# Descripcion : Instalacion y configuracion de DNS en Windows
-# Practica    : 4 – SSH y Refactorizacion Modular
-# Depende de  : Utils-Functions.ps1
-# ============================================================
-
-# ── Verificar si el rol DNS está instalado ───────────────────
-function Test-DNSInstalled {
-    $f = Get-WindowsFeature -Name DNS -ErrorAction SilentlyContinue
-    return ($f -and $f.Installed)
+function Obtener-IP($iface) {
+    (Get-NetIPAddress -InterfaceAlias $iface -AddressFamily IPv4 |
+      Where-Object {$_.IPAddress -notlike "169.*"}).IPAddress
 }
 
-# ── Instalar rol DNS ─────────────────────────────────────────
-function Install-DNSRole {
-    Write-Info "Verificando rol DNS Server..."
-    if (Test-DNSInstalled) {
-        Write-Warn "El rol DNS ya esta instalado."
+function Verificar-DNS {
+    Write-Host ">>> Verificando instalacion..." -ForegroundColor Cyan
+    $dns = Get-WindowsFeature -Name DNS
+    if ($dns.Installed) {
+        Write-Host " El rol DNS esta INSTALADO." -ForegroundColor Green
         Get-Service DNS | Select-Object Status, Name, DisplayName | Format-Table -AutoSize
     } else {
-        Write-Info "Instalando rol DNS Server..."
-        try {
-            Install-WindowsFeature -Name DNS -IncludeManagementTools -ErrorAction Stop | Out-Null
-            Start-Service DNS
-            Write-Ok "DNS instalado y servicio iniciado."
-            Registrar-Log "Rol DNS instalado."
-        } catch {
-            Write-Err "Error al instalar DNS: $_"
-        }
+        Write-Host " El rol DNS NO esta instalado." -ForegroundColor Red
     }
 }
 
-# ── Configurar forwarders ────────────────────────────────────
-function Set-DNSForwarder {
-    Write-Info "Configuracion de Forwarders DNS..."
-    $forward = (Read-Host "  IP del Forwarder (ej: 8.8.8.8)").Trim()
-    if (-not (Test-IPv4Address $forward)) { Write-Err "IP invalida."; return }
+function Instalar-DNS {
+    Write-Host ">>> Instalando DNS..." -ForegroundColor Cyan
+    try {
+        Install-WindowsFeature -Name DNS -IncludeManagementTools -ErrorAction Stop
+        Start-Service DNS
+        Write-Host " DNS instalado y servicio iniciado correctamente." -ForegroundColor Green
+    } catch {
+        Write-Host " Error al instalar: $_" -ForegroundColor Red
+    }
+}
 
-    Write-Info "Aplicando forwarder $forward..."
-    Start-Sleep -Seconds 1
+function Configurar-DNS {
+    Write-Host ">>> Configuracion de Forwarders" -ForegroundColor Cyan
+    $forward = Read-Host " Ingrese IP del Forwarder (ej: 8.8.8.8)"
+    
+    Write-Host " Aplicando configuracion..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+    
     try {
         Set-DnsServerForwarder -IPAddress ([string[]]$forward) -PassThru -ErrorAction Stop | Out-Null
-        Write-Ok "Forwarder configurado: $forward"
+        Write-Host " Forwarder configurado (Set-DnsServerForwarder)" -ForegroundColor Green
     } catch {
+        Write-Host " Intentando metodo alternativo..." -ForegroundColor Yellow
         try {
             Add-DnsServerForwarder -IPAddress $forward -ErrorAction Stop
-            Write-Ok "Forwarder agregado: $forward"
+            Write-Host " Forwarder configurado (Add-DnsServerForwarder)" -ForegroundColor Green
         } catch {
-            Write-Err "Error al configurar forwarder: $_"
+            Write-Host " Error al configurar Forwarder: $_" -ForegroundColor Red
         }
     }
+    
     Restart-Service DNS
-    Write-Ok "Servicio DNS reiniciado."
-    Registrar-Log "DNS Forwarder configurado: $forward"
+    Write-Host " Servicio DNS reiniciado." -ForegroundColor Green
 }
 
-# ── Listar zonas ─────────────────────────────────────────────
-function Get-DNSZones {
-    Write-Sep
-    Write-Info "=== ZONAS DNS CONFIGURADAS ==="
-    $zonas = Get-DnsServerZone -ErrorAction SilentlyContinue
+function Listar-Dominios {
+    Write-Host "=== LISTA DE ZONAS CONFIGURADAS ===" -ForegroundColor Cyan
+    $zonas = Get-DnsServerZone
     if ($zonas) {
         $zonas | Select-Object ZoneName, ZoneType | Format-Table -AutoSize
     } else {
-        Write-Warn "(No hay zonas configuradas)"
+        Write-Host " (No hay zonas configuradas)" -ForegroundColor Gray
     }
 }
 
-# ── Agregar nueva zona ───────────────────────────────────────
-function Add-DNSZone {
-    Write-Info "Agregar Nueva Zona DNS..."
-    $dom = (Read-Host "  Nombre del dominio (ej: empresa.local)").Trim()
-    if ([string]::IsNullOrWhiteSpace($dom)) { Write-Err "Nombre vacio."; return }
+function Agregar-Dominio {
+    Write-Host ">>> Agregar Nueva Zona" -ForegroundColor Cyan
+    $dom = Read-Host " Nombre del dominio (ej: empresa.local)"
 
     Write-Host ""
-    Write-Host "  Interfaces disponibles:" -ForegroundColor Yellow
-    $adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq "Up" })
-    if ($adapters.Count -eq 0) { Write-Err "No hay interfaces activas."; return }
-    foreach ($a in $adapters) {
-        Write-Host ("   - {0}  ({1})" -f $a.Name, $a.InterfaceDescription)
+    Write-Host " Interfaces de red disponibles:" -ForegroundColor Yellow
+    $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
+    
+    if (-not $adapters) {
+        Write-Host " No hay interfaces activas." -ForegroundColor Red
+        return
     }
 
-    $iface = (Read-Host "  Nombre EXACTO de la interfaz").Trim()
+    foreach ($a in $adapters) {
+        Write-Host "  - $($a.Name) ($($a.InterfaceDescription))"
+    }
+    Write-Host ""
+
+    $iface = Read-Host " Escribe el nombre EXACTO de la interfaz"
+    
     try {
-        $ip = (Get-NetIPAddress -InterfaceAlias $iface -AddressFamily IPv4 -ErrorAction Stop |
-               Where-Object { $_.IPAddress -notlike "169.*" } |
-               Select-Object -First 1).IPAddress
-    } catch { $ip = $null }
+        $ip = Obtener-IP $iface
+    } catch {
+        $ip = $null
+    }
 
-    if (-not $ip) { Write-Err "No se pudo obtener la IP de '$iface'."; return }
-    Write-Ok "IP detectada: $ip"
+    if (!$ip) {
+        Write-Host " No se pudo obtener IP o interfaz invalida." -ForegroundColor Red
+        return
+    }
 
-    $addWww = Leer-SiNo "  Agregar registro 'www'?"
+    Write-Host " IP detectada: $ip" -ForegroundColor Green
+
+    $www = Read-Host " Agregar registro 'www'? (s/n)"
 
     try {
         Add-DnsServerPrimaryZone -Name $dom -ZoneFile "$dom.dns" -ErrorAction Stop
-        Add-DnsServerResourceRecordA -Name "@"   -ZoneName $dom -IPv4Address $ip -ErrorAction SilentlyContinue
-        Add-DnsServerResourceRecordA -Name "ns"  -ZoneName $dom -IPv4Address $ip -ErrorAction SilentlyContinue
-        if ($addWww) {
+        
+        Add-DnsServerResourceRecordA -Name "@" -ZoneName $dom -IPv4Address $ip -ErrorAction SilentlyContinue
+
+        Add-DnsServerResourceRecordA -Name "ns" -ZoneName $dom -IPv4Address $ip -ErrorAction SilentlyContinue
+
+        if ($www -eq "s") {
             Add-DnsServerResourceRecordA -Name "www" -ZoneName $dom -IPv4Address $ip -ErrorAction SilentlyContinue
         }
+
         Restart-Service DNS
-        Write-Ok "Dominio '$dom' agregado exitosamente (IP: $ip)."
-        Registrar-Log "DNS Zona creada: $dom -> $ip"
+        Write-Host " Dominio '$dom' agregado exitosamente." -ForegroundColor Green
     } catch {
-        Write-Err "Error al crear zona: $_"
+        Write-Host " Error al crear zona: $_" -ForegroundColor Red
     }
 }
 
-# ── Eliminar zona ────────────────────────────────────────────
-function Remove-DNSZone {
-    Write-Info "Eliminar Zona DNS..."
-    Get-DNSZones
-    $dom = (Read-Host "  Nombre del dominio a eliminar").Trim()
+function Borrar-Dominio {
+    Write-Host ">>> Eliminar Zona" -ForegroundColor Cyan
+    Listar-Dominios
+    Write-Host ""
+    $dom = Read-Host " Escribe el nombre del dominio a eliminar"
+    
     if ([string]::IsNullOrWhiteSpace($dom)) { return }
-    if (Leer-SiNo "Confirmar eliminar '$dom'?" $false) {
-        try {
-            Remove-DnsServerZone -Name $dom -Force -ErrorAction Stop
-            Restart-Service DNS
-            Write-Ok "Zona '$dom' eliminada."
-            Registrar-Log "DNS Zona eliminada: $dom"
-        } catch {
-            Write-Err "Error al eliminar: $_"
-        }
+
+    try {
+        Remove-DnsServerZone -Name $dom -Force -ErrorAction Stop
+        Restart-Service DNS
+        Write-Host " Dominio eliminado correctamente." -ForegroundColor Green
+    } catch {
+        Write-Host " Error al eliminar: $_" -ForegroundColor Red
     }
 }
 
-# ── Probar resolución DNS ────────────────────────────────────
-function Test-DNSResolution {
-    Write-Info "Prueba de Resolucion DNS (Resolve-DnsName)..."
-    $dom = (Read-Host "  Dominio a consultar").Trim()
+function Consultar-DNS {
+    Write-Host ">>> Prueba de Resolucion (NSLookup)" -ForegroundColor Cyan
+    $dom = Read-Host " Dominio a consultar"
     if ([string]::IsNullOrWhiteSpace($dom)) { return }
+    
     try {
         Resolve-DnsName $dom -ErrorAction Stop | Format-Table -AutoSize
     } catch {
-        Write-Err "No se pudo resolver '$dom'."
+        Write-Host " No se pudo resolver el nombre." -ForegroundColor Red
     }
 }
 
-# ── Estado del sistema DNS ───────────────────────────────────
-function Show-DNSStatus {
-    Write-Sep
-    Write-Info "=== ESTADO DEL SISTEMA DNS ==="
-    if (Test-DNSInstalled) {
-        Write-Ok "Rol DNS Server: INSTALADO"
-        Test-WinService "DNS"
-    } else {
-        Write-Warn "Rol DNS Server: NO INSTALADO"
+function Dibujar-Menu-Principal-DNS {
+    Clear-Host
+    Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "              ADMINISTRADOR DE SERVIDOR DNS             " -ForegroundColor Yellow
+    Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "   1. Verificar estado del servicio" -ForegroundColor White
+    Write-Host "   2. Instalar rol DNS Server" -ForegroundColor White
+    Write-Host "   3. Configurar Forwarders" -ForegroundColor White
+    Write-Host "   4. Gestion de Dominios (Zonas) >>" -ForegroundColor White
+    Write-Host "   5. Salir al menu principal" -ForegroundColor White
+    Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host ""
+}
+
+function Dibujar-Menu-Dominios {
+    Clear-Host
+    Write-Host "--------------------------------------------------------" -ForegroundColor Green
+    Write-Host "              GESTION DE ZONAS Y DOMINIOS               " -ForegroundColor White
+    Write-Host "--------------------------------------------------------" -ForegroundColor Green
+    Write-Host "   1. Listar dominios actuales" -ForegroundColor White
+    Write-Host "   2. Agregar nuevo dominio" -ForegroundColor White
+    Write-Host "   3. Eliminar dominio existente" -ForegroundColor White
+    Write-Host "   4. Probar resolucion DNS" -ForegroundColor White
+    Write-Host "   0. Volver al menu anterior" -ForegroundColor White
+    Write-Host "--------------------------------------------------------" -ForegroundColor Green
+    Write-Host ""
+}
+
+function Iniciar-MenuDNS {
+    while ($true) {
+        Dibujar-Menu-Principal-DNS
+        $op = Read-Host " Seleccione una opcion"
+
+        switch ($op) {
+            "1" { Verificar-DNS; Pausa }
+            "2" { Instalar-DNS; Pausa }
+            "3" { Configurar-DNS; Pausa }
+            "4" {
+                while ($true) {
+                    Dibujar-Menu-Dominios
+                    $sub = Read-Host " Seleccione una opcion del sub-menu"
+                    
+                    switch ($sub) {
+                        "1" { Listar-Dominios; Pausa }
+                        "2" { Agregar-Dominio; Pausa }
+                        "3" { Borrar-Dominio; Pausa }
+                        "4" { Consultar-DNS; Pausa }
+                        "0" { break }
+                        default { Write-Host " Opcion invalida." -ForegroundColor Red; Start-Sleep -Seconds 1 }
+                    }
+                    if ($sub -eq "0") { break }
+                }
+            }
+            "5" { 
+                Write-Host "Volviendo..." -ForegroundColor Gray
+                return 
+            }
+            default { 
+                Write-Host " Opcion no valida, intente de nuevo." -ForegroundColor Red
+                Start-Sleep -Seconds 1
+            }
+        }
     }
 }
