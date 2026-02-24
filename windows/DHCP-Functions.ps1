@@ -21,28 +21,32 @@ function Obtener-DireccionDeRed {
 
 function Obtener-MascaraDeInterfaz {
     param([string]$Ip)
-    $startN = Convertir-AUInt32IPv4 $Ip
+    $startN  = Convertir-AUInt32IPv4 $Ip
     $adapters = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" }
     foreach ($a in $adapters) {
-        $prefix = $a.PrefixLength
-        $maskN  = [UInt32](([UInt64]0xFFFFFFFF -shl (32 - $prefix)) -band 0xFFFFFFFF)
-        $maskStr = Convertir-DeUInt32IPv4 $maskN
-        $netN   = [UInt32]((Convertir-AUInt32IPv4 $a.IPAddress) -band $maskN)
-        $inputN = [UInt32]($startN -band $maskN)
-        if ($netN -eq $inputN) {
-            return $maskStr
+        $prefix  = $a.PrefixLength
+        # Calculo seguro sin shift: construir mascara bit a bit via Int64
+        $maskLong = [Int64]0
+        for ($b = 0; $b -lt $prefix; $b++) {
+            $maskLong = $maskLong -bor ([Int64]1 -shl (31 - $b))
         }
+        $maskN   = [UInt32]($maskLong -band 0xFFFFFFFF)
+        $maskStr = Convertir-DeUInt32IPv4 $maskN
+        $netN    = [UInt32]((Convertir-AUInt32IPv4 $a.IPAddress) -band $maskN)
+        $inputN  = [UInt32]($startN -band $maskN)
+        if ($netN -eq $inputN) { return $maskStr }
     }
     return $null
 }
 
 function Iniciar-Monitoreo {
-    Write-Host " Monitoreo activo. Presiona CTRL+C para salir." -ForegroundColor DarkCyan
+    $salirMonitoreo = $false
+    Write-Host " Monitoreo activo. Presiona Q para volver al menu." -ForegroundColor DarkCyan
     Start-Sleep -Seconds 1
-    while ($true) {
+    while (-not $salirMonitoreo) {
         Clear-Host
-        Write-Host "=== MONITOREO DHCP === $(Get-Date -Format 'HH:mm:ss') === (CTRL+C para salir)" -ForegroundColor Cyan
+        Write-Host "=== MONITOREO DHCP === $(Get-Date -Format 'HH:mm:ss') === (Q para volver)" -ForegroundColor Cyan
 
         Write-Host "`n--- AMBITOS CONFIGURADOS ---" -ForegroundColor Yellow
         $scopes = Get-DhcpServerv4Scope -ErrorAction SilentlyContinue
@@ -67,16 +71,32 @@ function Iniciar-Monitoreo {
             Write-Host " (Sin clientes conectados aun)" -ForegroundColor Gray
         }
 
-        Start-Sleep -Seconds 5
+        Write-Host "`n Actualizando en 5s... (Q + ENTER para volver al menu)" -ForegroundColor DarkGray
+
+        # Esperar 5s pero revisando si el usuario presiono Q
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($timer.Elapsed.TotalSeconds -lt 5) {
+            if ([Console]::KeyAvailable) {
+                $key = [Console]::ReadKey($true)
+                if ($key.KeyChar -eq 'q' -or $key.KeyChar -eq 'Q') {
+                    $salirMonitoreo = $true
+                    break
+                }
+            }
+            Start-Sleep -Milliseconds 200
+        }
     }
 }
 
 function Configurar-Ambito {
     Write-Host ">>> CONFIGURANDO AMBITO DHCP" -ForegroundColor Cyan
+
+    # --- 1. Datos basicos del scope ---
     $name  = Read-Host " Nombre del ambito"
     $start = Read-Host " IP Inicial"
     $end   = Read-Host " IP Final"
 
+    # --- 2. Mascara automatica ---
     $maskAuto = Obtener-MascaraDeInterfaz $start
     if ($maskAuto) {
         Write-Host " Mascara detectada automaticamente: $maskAuto" -ForegroundColor DarkGreen
@@ -86,10 +106,39 @@ function Configurar-Ambito {
         $mask = Read-Host " Mascara (ej: 255.255.255.0)"
     }
 
-    $gw    = Read-Host " Gateway (deja vacio para omitir)"
-    $dns1  = Read-Host " DNS Primario (deja vacio para omitir)"
-    $dns2  = Read-Host " DNS Secundario (deja vacio para omitir)"
+    # --- 3. Gateway y DNS opcionales ---
+    $gw   = Read-Host " Gateway   (ENTER para omitir)"
+    $dns1 = Read-Host " DNS Primario   (ENTER para omitir)"
+    $dns2 = Read-Host " DNS Secundario (ENTER para omitir)"
 
+    # --- 4. Seleccion de adaptador ---
+    Write-Host "`n Adaptadores de red disponibles:" -ForegroundColor Yellow
+    $adapters = Get-NetAdapter | Where-Object { $_.Status -eq "Up" }
+    if (-not $adapters) {
+        Write-Host " No hay adaptadores activos." -ForegroundColor Red
+        return
+    }
+    $i = 1
+    $listaAdapters = @()
+    foreach ($a in $adapters) {
+        $ipObj = Get-NetIPAddress -InterfaceAlias $a.Name -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notlike "169.*" } |
+            Select-Object -First 1
+        $ipInfo = if ($ipObj -and ($ipObj.PSObject.Properties.Name -contains 'IPAddress')) { $ipObj.IPAddress } else { "sin IP" }
+        Write-Host "  $i) $($a.Name)  [$ipInfo]" -ForegroundColor White
+        $listaAdapters += $a.Name
+        $i++
+    }
+    $selNum = (Read-Host " Selecciona el numero del adaptador para este scope").Trim()
+    $selIdx = [int]$selNum - 1
+    if ($selIdx -lt 0 -or $selIdx -ge $listaAdapters.Count) {
+        Write-Host " Seleccion invalida." -ForegroundColor Red
+        return
+    }
+    $ifaceSeleccionada = $listaAdapters[$selIdx]
+    Write-Host " Adaptador seleccionado: $ifaceSeleccionada" -ForegroundColor Cyan
+
+    # --- 5. Calcular ID de red y crear scope ---
     try {
         $id = Obtener-DireccionDeRed $start $mask
     } catch {
@@ -98,6 +147,24 @@ function Configurar-Ambito {
     }
 
     try {
+        # --- 5.1 Asignar IP del servidor en el adaptador seleccionado ---
+        Write-Host " Configurando IP $start en $ifaceSeleccionada..." -ForegroundColor Yellow
+        # Quitar IPs anteriores en esa interfaz (excepto APIPA que se van solas)
+        $ipsActuales = Get-NetIPAddress -InterfaceAlias $ifaceSeleccionada -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" }
+        foreach ($ipVieja in $ipsActuales) {
+            Remove-NetIPAddress -InterfaceAlias $ifaceSeleccionada -IPAddress $ipVieja.IPAddress -Confirm:$false -ErrorAction SilentlyContinue
+        }
+        # Convertir mascara a PrefixLength
+        $maskBits = Convertir-AUInt32IPv4 $mask
+        $prefix = 0
+        for ($b = 31; $b -ge 0; $b--) {
+            if ($maskBits -band ([UInt32]1 -shl $b)) { $prefix++ }
+        }
+        # Asignar la nueva IP al adaptador seleccionado
+        New-NetIPAddress -InterfaceAlias $ifaceSeleccionada -IPAddress $start -PrefixLength $prefix -ErrorAction Stop | Out-Null
+        Write-Host " IP $start asignada a $ifaceSeleccionada correctamente." -ForegroundColor Green
+
         if (Get-DhcpServerv4Scope -ScopeId $id -ErrorAction SilentlyContinue) {
             Remove-DhcpServerv4Scope -ScopeId $id -Force
             Write-Host " Scope existente eliminado." -ForegroundColor Yellow
@@ -106,23 +173,11 @@ function Configurar-Ambito {
         Add-DhcpServerv4Scope -Name $name -StartRange $start -EndRange $end `
             -SubnetMask $mask -State Active -ErrorAction Stop
 
-        $startN    = Convertir-AUInt32IPv4 $start
-        $endN      = Convertir-AUInt32IPv4 $end
-        $serverIPs = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-            Where-Object { $_.IPAddress -notlike "169.*" -and $_.IPAddress -ne "127.0.0.1" }
+        # --- 6. Excluir la IP del servidor (IP inicial) del scope ---
+        Add-DhcpServerv4ExclusionRange -ScopeId $id -StartRange $start -EndRange $start -ErrorAction SilentlyContinue
+        Write-Host " IP del servidor $start excluida automaticamente del scope." -ForegroundColor Yellow
 
-        foreach ($addr in $serverIPs) {
-            try {
-                $addrN = Convertir-AUInt32IPv4 $addr.IPAddress
-                if ($addrN -ge $startN -and $addrN -le $endN) {
-                    Add-DhcpServerv4ExclusionRange -ScopeId $id -StartRange $addr.IPAddress -EndRange $addr.IPAddress -ErrorAction Stop
-                    Write-Host " IP del servidor $($addr.IPAddress) excluida automaticamente." -ForegroundColor Yellow
-                }
-            } catch {
-                Write-Host " No se pudo excluir $($addr.IPAddress): $_" -ForegroundColor DarkYellow
-            }
-        }
-
+        # --- 7. Gateway y DNS ---
         if (-not [string]::IsNullOrWhiteSpace($gw)) {
             Set-DhcpServerv4OptionValue -ScopeId $id -Router $gw -ErrorAction Stop
         }
@@ -135,7 +190,8 @@ function Configurar-Ambito {
         }
 
         Restart-Service DHCPServer
-        Write-Host " Ambito '$name' ($id) configurado exitosamente." -ForegroundColor Green
+        Write-Host "`n Ambito '$name' ($id) en adaptador '$ifaceSeleccionada' configurado exitosamente." -ForegroundColor Green
+
     } catch {
         Write-Host " Error: $_" -ForegroundColor Red
     }
